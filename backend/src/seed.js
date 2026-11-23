@@ -80,7 +80,7 @@ async function seed() {
     ],
     [
       'rm-seminar-001',
-      'APJ Abdul Kalam Seminar Hall',
+      'seminar _hall',
       'seminar_hall',
       180,
       JSON.stringify(['AC', 'Projector', 'Wireless Mics', 'Podium']),
@@ -89,7 +89,7 @@ async function seed() {
     ],
     [
       'rm-seminar-002',
-      'Sir MV Convention Hall',
+      'Auditorium',
       'seminar_hall',
       120,
       JSON.stringify(['AC', 'Projector', 'Podium', 'Sound System']),
@@ -98,7 +98,7 @@ async function seed() {
     ],
     [
       'rm-lab-001',
-      'Turing Advanced Computing Lab',
+      'C-19 Computing Lab',
       'lab',
       60,
       JSON.stringify(['60 High-end PCs', 'Gigabit LAN', 'Projector']),
