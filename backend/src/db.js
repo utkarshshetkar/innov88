@@ -14,6 +14,7 @@ db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
 
+  -- 1. Users Table (Includes Student, Coordinator, Faculty, In-Charge, HOD, Admin)
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -25,6 +26,7 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 2. Campus Rooms Table
   CREATE TABLE IF NOT EXISTS rooms (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -37,6 +39,7 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 3. Academic Timetable Table (For Automated Clash Detection)
   CREATE TABLE IF NOT EXISTS timetable (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -48,6 +51,7 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 4. Bookings Table (Includes Sequential Pipeline Stages & Equipment Requirements)
   CREATE TABLE IF NOT EXISTS bookings (
     id TEXT PRIMARY KEY,
     room_id TEXT NOT NULL REFERENCES rooms(id),
@@ -72,6 +76,7 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- 5. In-App Notifications Center Table
   CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),
@@ -82,7 +87,7 @@ db.exec(`
   );
 `);
 
-// Safe migrations for existing databases:
+// Safe migrations in case table was partially upgraded
 try { db.exec(`ALTER TABLE users ADD COLUMN designation TEXT DEFAULT 'Student'`); } catch(e) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 try { db.exec(`ALTER TABLE bookings ADD COLUMN requirements TEXT DEFAULT '[]'`); } catch(e) {}
