@@ -116,6 +116,9 @@ async function seed() {
     ]
   ];
 
+
+
+  
   const insertRoom = db.prepare(`
     INSERT INTO rooms (id, name, type, capacity, facilities, needs_approval, incharge_id)
     VALUES (?, ?, ?, ?, ?, ?, ?)
