@@ -1,9 +1,14 @@
+<<<<<<< Updated upstream
+=======
+require('dotenv').config();
+>>>>>>> Stashed changes
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 
 async function seed() {
   console.log('--- Seeding Custom Authority Accounts ---');
 
+<<<<<<< Updated upstream
   // Wipes existing data clean so new credentials take effect
   db.exec(`
     DELETE FROM notifications;
@@ -12,6 +17,23 @@ async function seed() {
     DELETE FROM rooms;
     DELETE FROM users;
   `);
+=======
+// Clean existing data so re-seeding always works smoothly
+db.exec(`
+  DELETE FROM notifications;
+  DELETE FROM bookings;
+  DELETE FROM timetable;
+  DELETE FROM rooms;
+  DELETE FROM users;
+`);
+
+// Fixed deterministic IDs so foreign keys never fail
+const adminId    = 'usr-admin-001';
+const inchargeId = 'usr-incharge-001';
+const faculty1Id = 'usr-faculty-001';
+const faculty2Id = 'usr-faculty-002';
+const coordId    = 'usr-coord-001';
+>>>>>>> Stashed changes
 
   
 
@@ -24,6 +46,7 @@ async function seed() {
   const COORD_EMAIL = 'yash.coordinator@college.edu';
   const COORD_PASS = 'yash@2026';
 
+<<<<<<< Updated upstream
   // 2. Faculty Advisor (Level 2 Authority)
   const FACULTY_NAME = 'Utkarsh Shetkar';
   const FACULTY_EMAIL = 'utkarsh.faculty@college.edu';
@@ -83,3 +106,76 @@ async function seed() {
 }
 
 seed().catch(console.error);
+=======
+const insertUser = db.prepare('INSERT INTO users (id, name, email, password, role) VALUES (?, ?, ?, ?, ?)');
+users.forEach(u => insertUser.run(...u));
+console.log(`  ✓ ${users.length} users`);
+
+const lab1Id        = 'rm-lab-001';
+const lab2Id        = 'rm-lab-002';
+const lab3Id        = 'rm-lab-003';
+const seminarId     = 'rm-seminar-001';
+const auditoriumId  = 'rm-auditorium-001';
+const classroomId   = 'rm-classroom-001';
+
+const rooms = [
+  [lab1Id,       'Computer Lab 1',   'lab',          40,  JSON.stringify(['computers','projector','AC']),            0, null],
+  [lab2Id,       'Computer Lab 2',   'lab',          40,  JSON.stringify(['computers','projector','AC']),            0, null],
+  [lab3Id,       'Electronics Lab',  'lab',          30,  JSON.stringify(['oscilloscopes','multimeters','projector']), 0, null],
+  [seminarId,    'Seminar Hall',     'seminar_hall', 120, JSON.stringify(['projector','mic','AC','whiteboard']),     1, inchargeId],
+  [auditoriumId, 'Main Auditorium',  'auditorium',   500, JSON.stringify(['stage','mic','projector','AC','chairs']),  1, inchargeId],
+  [classroomId,  'Classroom 101',    'classroom',    60,  JSON.stringify(['whiteboard','projector']),                0, null],
+];
+
+const insertRoom = db.prepare('INSERT INTO rooms (id, name, type, capacity, facilities, needs_approval, incharge_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
+rooms.forEach(r => insertRoom.run(...r));
+console.log(`  ✓ ${rooms.length} rooms`);
+
+const timetableSlots = [
+  ['tt-001', lab1Id, 1, '09:00', '11:00', 'DBMS Lab',          'Prof. Rahul Verma'],
+  ['tt-002', lab1Id, 3, '09:00', '11:00', 'DBMS Lab',          'Prof. Rahul Verma'],
+  ['tt-003', lab1Id, 5, '09:00', '11:00', 'DBMS Lab',          'Prof. Rahul Verma'],
+  ['tt-004', lab1Id, 2, '14:00', '16:00', 'Web Dev Lab',       'Prof. Meera Singh'],
+  ['tt-005', lab1Id, 4, '14:00', '16:00', 'Web Dev Lab',       'Prof. Meera Singh'],
+  ['tt-006', lab2Id, 1, '11:00', '13:00', 'DSP Lab',           'Prof. Rahul Verma'],
+  ['tt-007', lab2Id, 3, '11:00', '13:00', 'DSP Lab',           'Prof. Rahul Verma'],
+  ['tt-008', lab3Id, 2, '09:00', '11:00', 'Electronics Lab',   'Prof. Meera Singh'],
+  ['tt-009', lab3Id, 4, '09:00', '11:00', 'Electronics Lab',   'Prof. Meera Singh'],
+  ['tt-010', seminarId, 5, '10:00', '12:00', 'Weekly Seminar', 'Dr. Priya Sharma'],
+  ['tt-011', classroomId, 1, '08:00', '09:00', 'Morning Assembly', 'Admin'],
+  ['tt-012', classroomId, 2, '08:00', '09:00', 'Morning Assembly', 'Admin'],
+  ['tt-013', classroomId, 3, '08:00', '09:00', 'Morning Assembly', 'Admin'],
+  ['tt-014', classroomId, 4, '08:00', '09:00', 'Morning Assembly', 'Admin'],
+  ['tt-015', classroomId, 5, '08:00', '09:00', 'Morning Assembly', 'Admin'],
+];
+
+const insertSlot = db.prepare('INSERT INTO timetable (id, room_id, day_of_week, start_time, end_time, subject, faculty_name) VALUES (?, ?, ?, ?, ?, ?, ?)');
+timetableSlots.forEach(s => insertSlot.run(...s));
+console.log(`  ✓ ${timetableSlots.length} timetable slots`);
+
+function futureDate(daysAhead) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.toISOString().split('T')[0];
+}
+
+const bookings = [
+  ['bk-001', seminarId, coordId, 'ACM Tech Talk: AI in 2025',
+   'Monthly tech talk open to all students', futureDate(3), '14:00', '16:00', 80, 'pending', null],
+  ['bk-002', lab2Id, faculty1Id, 'Extra Class – OS',
+   'Supplementary class for OS unit 4', futureDate(2), '15:00', '17:00', 35, 'approved', null],
+  ['bk-003', classroomId, faculty2Id, 'Project Review – Group B',
+   null, futureDate(1), '11:00', '13:00', 20, 'approved', null],
+  ['bk-004', auditoriumId, coordId, 'Annual Cultural Fest – Day 1',
+   'Cultural programme, need stage + PA system', futureDate(10), '09:00', '18:00', 400, 'pending', null],
+];
+
+const insertBooking = db.prepare(`
+  INSERT INTO bookings (id, room_id, user_id, title, description, date, start_time, end_time, attendees, status, approved_by)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+bookings.forEach(b => insertBooking.run(...b));
+console.log(`  ✓ ${bookings.length} sample bookings`);
+
+console.log('\n✅ Seed complete!\n');
+>>>>>>> Stashed changes
