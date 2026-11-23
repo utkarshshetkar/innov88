@@ -5,12 +5,43 @@ const { auth } = require('../middleware');
 
 const router = express.Router();
 
-// ─── Clash detection ──────────────────────────────────────────────────────────
+// Strict 1-to-1 mapping: Each stage strictly requires its designated authority
+const STAGE_RULES = {
+  coordinator: {
+    requiredRole: 'coordinator',
+    currentStatus: 'pending_coordinator',
+    nextStage: 'faculty',
+    nextStatus: 'pending_faculty',
+    stageName: 'Step 1: Student Coordinator Review'
+  },
+  faculty: {
+    requiredRole: 'faculty',
+    currentStatus: 'pending_faculty',
+    nextStage: 'incharge',
+    nextStatus: 'pending_incharge',
+    stageName: 'Step 2: Faculty Advisor Review'
+  },
+  incharge: {
+    requiredRole: 'incharge',
+    currentStatus: 'pending_incharge',
+    nextStage: 'hod',
+    nextStatus: 'pending_hod',
+    stageName: 'Step 3: Hall In-Charge Verification'
+  },
+  hod: {
+    requiredRole: 'hod',
+    currentStatus: 'pending_hod',
+    nextStage: 'completed',
+    nextStatus: 'approved',
+    stageName: 'Step 4: HOD Final Clearance'
+  }
+};
+
 function detectClash(roomId, date, startTime, endTime, excludeBookingId = null) {
   const d = new Date(date);
   const dayOfWeek = d.getDay();
 
-  // Check timetable clash
+  // 1. Check academic timetable
   const ttClash = db.prepare(`
     SELECT * FROM timetable
     WHERE room_id = ? AND day_of_week = ?
@@ -24,11 +55,12 @@ function detectClash(roomId, date, startTime, endTime, excludeBookingId = null) 
     };
   }
 
-  // Check booking clash
+  // 2. Check existing bookings
   let query = `
-    SELECT b.*, u.name as requester_name FROM bookings b JOIN users u ON b.user_id = u.id
+    SELECT b.*, u.name as requester_name FROM bookings b 
+    JOIN users u ON b.user_id = u.id
     WHERE b.room_id = ? AND b.date = ?
-      AND b.status IN ('approved','pending')
+      AND b.status NOT IN ('rejected', 'cancelled')
       AND b.start_time < ? AND b.end_time > ?
   `;
   const params = [roomId, date, endTime, startTime];
@@ -42,27 +74,34 @@ function detectClash(roomId, date, startTime, endTime, excludeBookingId = null) 
   if (bClash) {
     return {
       clash: true,
-      reason: `Clashes with a ${bClash.status} booking "${bClash.title}" by ${bClash.requester_name} (${bClash.start_time}–${bClash.end_time})`
+      reason: `Clashes with booking "${bClash.title}" (${bClash.status}) by ${bClash.requester_name} (${bClash.start_time}–${bClash.end_time})`
     };
   }
 
   return { clash: false };
 }
 
-// ─── Helper: create notification ─────────────────────────────────────────────
 function notify(userId, message, bookingId = null) {
-  db.prepare('INSERT INTO notifications (id, user_id, booking_id, message) VALUES (?, ?, ?, ?)')
-    .run(uuidv4(), userId, bookingId, message);
+  db.prepare(`
+    INSERT INTO notifications (id, user_id, booking_id, message) 
+    VALUES (?, ?, ?, ?)
+  `).run(uuidv4(), userId, bookingId, message);
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+function parseJSON(str, fallback = []) {
+  if (!str) return fallback;
+  if (typeof str !== 'string') return str;
+  try { return JSON.parse(str); } catch { return fallback; }
+}
 
-// GET /api/bookings  — list bookings (filtered by role)
+// GET /api/bookings - Filtered strictly by viewer identity and authority queue
 router.get('/', auth(), (req, res) => {
-  const { room_id, date_from, date_to, status, my } = req.query;
+  const { status, room_id, date, my } = req.query;
+  const user = req.user;
+
   let query = `
-    SELECT b.*, r.name as room_name, r.type as room_type,
-           u.name as requester_name, u.email as requester_email
+    SELECT b.*, r.name as room_name, r.type as room_type, r.capacity as room_capacity,
+           u.name as requester_name, u.email as requester_email, u.role as requester_role, u.designation as requester_designation
     FROM bookings b
     JOIN rooms r ON b.room_id = r.id
     JOIN users u ON b.user_id = u.id
@@ -70,163 +109,286 @@ router.get('/', auth(), (req, res) => {
   `;
   const params = [];
 
-  // Faculty/coordinator see only their own bookings unless admin/incharge
-  if (my === '1' || (req.user.role === 'faculty' || req.user.role === 'coordinator')) {
+  // Students always only see their own requests
+  if (user.role === 'student' || my === 'true') {
     query += ' AND b.user_id = ?';
-    params.push(req.user.id);
+    params.push(user.id);
+  } else if (status === 'pending') {
+    // Each authority ONLY sees the requests currently waiting at THEIR turn
+    if (user.role === 'coordinator') {
+      query += " AND b.status = 'pending_coordinator'";
+    } else if (user.role === 'faculty') {
+      query += " AND b.status = 'pending_faculty'";
+    } else if (user.role === 'incharge') {
+      query += " AND b.status = 'pending_incharge'";
+    } else if (user.role === 'hod') {
+      query += " AND b.status = 'pending_hod'";
+    }
+  } else if (status) {
+    query += ' AND b.status = ?';
+    params.push(status);
   }
 
-  // Incharge sees bookings for rooms they manage
-  if (req.user.role === 'incharge') {
-    query += ' AND r.incharge_id = ?';
-    params.push(req.user.id);
+  if (room_id) {
+    query += ' AND b.room_id = ?';
+    params.push(room_id);
+  }
+  if (date) {
+    query += ' AND b.date = ?';
+    params.push(date);
   }
 
-  if (room_id) { query += ' AND b.room_id = ?'; params.push(room_id); }
-  if (date_from) { query += ' AND b.date >= ?'; params.push(date_from); }
-  if (date_to) { query += ' AND b.date <= ?'; params.push(date_to); }
-  if (status) { query += ' AND b.status = ?'; params.push(status); }
+  query += ' ORDER BY b.date DESC, b.start_time DESC';
+  const rows = db.prepare(query).all(...params);
 
-  query += ' ORDER BY b.date DESC, b.start_time ASC';
+  const bookings = rows.map(r => ({
+    ...r,
+    requirements: parseJSON(r.requirements, []),
+    approval_history: parseJSON(r.approval_history, [])
+  }));
 
-  const bookings = db.prepare(query).all(...params);
   res.json(bookings);
 });
 
-// GET /api/bookings/:id
-router.get('/:id', auth(), (req, res) => {
-  const booking = db.prepare(`
-    SELECT b.*, r.name as room_name, r.type as room_type, r.capacity,
-           r.facilities, r.needs_approval,
-           u.name as requester_name, u.email as requester_email
-    FROM bookings b
-    JOIN rooms r ON b.room_id = r.id
-    JOIN users u ON b.user_id = u.id
-    WHERE b.id = ?
-  `).get(req.params.id);
-
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-  // Access control
-  if (req.user.role === 'faculty' || req.user.role === 'coordinator') {
-    if (booking.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-  }
-  res.json(booking);
-});
-
-// POST /api/bookings  — create a booking request
-router.post('/', auth(['faculty', 'coordinator', 'admin']), (req, res) => {
-  const { room_id, title, description, date, start_time, end_time, attendees = 1 } = req.body;
+// POST /api/bookings - Initiates Step 1 (Coordinator queue)
+router.post('/', auth(), (req, res) => {
+  const {
+    room_id,
+    title,
+    description,
+    date,
+    start_time,
+    end_time,
+    attendees = 1,
+    requirements = []
+  } = req.body;
 
   if (!room_id || !title || !date || !start_time || !end_time) {
-    return res.status(400).json({ error: 'room_id, title, date, start_time, end_time required' });
+    return res.status(400).json({ error: 'Missing required reservation fields' });
   }
+
   if (start_time >= end_time) {
-    return res.status(400).json({ error: 'start_time must be before end_time' });
+    return res.status(400).json({ error: 'Start time must precede end time' });
   }
 
-  // Validate date is not in the past
-  const bookingDate = new Date(date);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  if (bookingDate < today) {
-    return res.status(400).json({ error: 'Cannot book a past date' });
-  }
+  const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(room_id);
+  if (!room) return res.status(404).json({ error: 'Hall not found' });
 
-  // Check room exists
-  const room = db.prepare('SELECT * FROM rooms WHERE id = ? AND is_active = 1').get(room_id);
-  if (!room) return res.status(404).json({ error: 'Room not found' });
-
-  // Capacity check
   if (attendees > room.capacity) {
     return res.status(400).json({
-      error: `Room capacity is ${room.capacity}, but you requested for ${attendees} attendees`
+      error: `Room capacity is ${room.capacity}, but ${attendees} attendees requested.`
     });
   }
 
   // Clash detection
-  const clashResult = detectClash(room_id, date, start_time, end_time);
-  if (clashResult.clash) {
-    return res.status(409).json({ error: clashResult.reason });
+  const clash = detectClash(room_id, date, start_time, end_time);
+  if (clash.clash) {
+    return res.status(409).json({ error: clash.reason });
   }
 
-  const id = uuidv4();
-  // Auto-approve rooms that don't need approval
-  const status = room.needs_approval ? 'pending' : 'approved';
+  const bookingId = uuidv4();
+  const initialStatus = 'pending_coordinator';
+  const initialStage = 'coordinator';
+
+  const history = [
+    {
+      stage: 'submission',
+      actor_name: req.user.name,
+      actor_role: req.user.role,
+      designation: req.user.designation || 'Student',
+      action: 'submitted',
+      timestamp: new Date().toISOString(),
+      remarks: 'Reservation submitted to Student Coordinator'
+    }
+  ];
 
   db.prepare(`
-    INSERT INTO bookings (id, room_id, user_id, title, description, date, start_time, end_time, attendees, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, room_id, req.user.id, title, description || null, date, start_time, end_time, attendees, status);
+    INSERT INTO bookings (
+      id, room_id, user_id, title, description, date, start_time, end_time,
+      attendees, requirements, status, current_stage, approval_history
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    bookingId,
+    room_id,
+    req.user.id,
+    title,
+    description || '',
+    date,
+    start_time,
+    end_time,
+    attendees,
+    JSON.stringify(requirements),
+    initialStatus,
+    initialStage,
+    JSON.stringify(history)
+  );
 
-  // Notify incharge if approval needed
-  if (room.needs_approval && room.incharge_id) {
+  // Notify Coordinator immediately
+  const coordinator = db.prepare("SELECT id FROM users WHERE role = 'coordinator' LIMIT 1").get();
+  if (coordinator) {
     notify(
-      room.incharge_id,
-      `New booking request for ${room.name}: "${title}" on ${date} (${start_time}–${end_time}) by ${req.user.name}`,
-      id
+      coordinator.id,
+      `New request "${title}" from ${req.user.name} is waiting in your Step 1 Coordinator queue.`,
+      bookingId
     );
   }
 
+  res.status(201).json({
+    message: 'Reservation submitted. Now queued at Step 1: Student Coordinator.',
+    bookingId,
+    status: initialStatus
+  });
+});
+
+// PATCH /api/bookings/:id/approve - Strict Sequential Role Approval
+router.patch('/:id/approve', auth(['coordinator', 'faculty', 'incharge', 'hod']), (req, res) => {
+  const { remarks = 'Approved' } = req.body;
+  const user = req.user;
+
+  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  // Security Rule 1: No self-approvals
+  if (booking.user_id === user.id) {
+    return res.status(403).json({ error: 'Security Violation: Cannot approve your own request.' });
+  }
+
+  // Security Rule 2: Strict current-stage check
+  const currentStage = booking.current_stage;
+  const rule = STAGE_RULES[currentStage];
+
+  if (!rule) {
+    return res.status(400).json({
+      error: `Booking is in status "${booking.status}" and cannot accept further approvals.`
+    });
+  }
+
+  // Security Rule 3: Only the EXACT authority for this stage can approve (NO bypasses)
+  if (user.role !== rule.requiredRole) {
+    return res.status(403).json({
+      error: `Access Denied: This request is awaiting ${rule.requiredRole.toUpperCase()} approval. You are logged in as ${user.role.toUpperCase()}.`
+    });
+  }
+
+  const nextStatus = rule.nextStatus;
+  const nextStage = rule.nextStage;
+  const isFinalHOD = (nextStatus === 'approved');
+
+  const history = parseJSON(booking.approval_history, []);
+  history.push({
+    stage: currentStage,
+    actor_name: user.name,
+    actor_role: user.role,
+    designation: user.designation,
+    action: 'approved',
+    remarks: remarks.trim(),
+    timestamp: new Date().toISOString()
+  });
+
+  db.prepare(`
+    UPDATE bookings 
+    SET status = ?,
+        current_stage = ?,
+        approval_history = ?,
+        approved_by = CASE WHEN ? THEN ? ELSE approved_by END,
+        approved_at = CASE WHEN ? THEN datetime('now') ELSE approved_at END,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    nextStatus,
+    nextStage,
+    JSON.stringify(history),
+    isFinalHOD ? 1 : 0,
+    user.id,
+    isFinalHOD ? 1 : 0,
+    req.params.id
+  );
+
   // Notify requester
-  if (status === 'approved') {
-    notify(req.user.id, `Your booking "${title}" for ${room.name} on ${date} has been auto-approved.`, id);
-  } else {
-    notify(req.user.id, `Your booking request "${title}" for ${room.name} on ${date} has been submitted and is pending approval.`, id);
+  notify(
+    booking.user_id,
+    isFinalHOD
+      ? `🎉 SUCCESS: Your booking "${booking.title}" has received FINAL HOD approval and is officially CONFIRMED!`
+      : `Request "${booking.title}" approved by ${user.role.toUpperCase()}. Now forwarded to ${nextStage.toUpperCase()}.`,
+    booking.id
+  );
+
+  // Notify next authority immediately
+  if (!isFinalHOD) {
+    const nextAuth = db.prepare('SELECT id FROM users WHERE role = ? LIMIT 1').get(nextStage);
+    if (nextAuth) {
+      notify(
+        nextAuth.id,
+        `New request "${booking.title}" is ready for your ${nextStage.toUpperCase()} approval.`,
+        booking.id
+      );
+    }
   }
 
-  res.status(201).json({ id, status, room_name: room.name });
+  res.json({
+    message: isFinalHOD ? 'Final HOD Clearance granted. Hall officially booked!' : `Approved and forwarded to ${nextStage}.`,
+    current_stage: nextStage,
+    status: nextStatus
+  });
 });
 
-// PATCH /api/bookings/:id/approve  (incharge/admin)
-router.patch('/:id/approve', auth(['incharge', 'admin']), (req, res) => {
-  const booking = db.prepare(`
-    SELECT b.*, r.incharge_id, r.name as room_name
-    FROM bookings b JOIN rooms r ON b.room_id = r.id
-    WHERE b.id = ?
-  `).get(req.params.id);
+// PATCH /api/bookings/:id/reject - Rejection at current stage stops the entire workflow
+router.patch('/:id/reject', auth(['coordinator', 'faculty', 'incharge', 'hod']), (req, res) => {
+  const { reason = 'Rejected by authority' } = req.body;
+  const user = req.user;
 
+  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  if (booking.status !== 'pending') return res.status(400).json({ error: 'Booking is not pending' });
 
-  // Incharge can only approve their own rooms
-  if (req.user.role === 'incharge' && booking.incharge_id !== req.user.id) {
-    return res.status(403).json({ error: 'You can only approve bookings for your rooms' });
+  const currentStage = booking.current_stage;
+  const rule = STAGE_RULES[currentStage];
+
+  if (!rule) {
+    return res.status(400).json({ error: `Cannot reject: Request is not active (status: ${booking.status})` });
   }
 
-  db.prepare(`
-    UPDATE bookings SET status = 'approved', approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ?
-  `).run(req.user.id, req.params.id);
-
-  notify(booking.user_id, `Your booking "${booking.title}" for ${booking.room_name} on ${booking.date} has been approved! ✅`, booking.id);
-  res.json({ success: true });
-});
-
-// PATCH /api/bookings/:id/reject  (incharge/admin)
-router.patch('/:id/reject', auth(['incharge', 'admin']), (req, res) => {
-  const { reason } = req.body;
-  const booking = db.prepare(`
-    SELECT b.*, r.incharge_id, r.name as room_name
-    FROM bookings b JOIN rooms r ON b.room_id = r.id
-    WHERE b.id = ?
-  `).get(req.params.id);
-
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  if (booking.status !== 'pending') return res.status(400).json({ error: 'Booking is not pending' });
-
-  if (req.user.role === 'incharge' && booking.incharge_id !== req.user.id) {
-    return res.status(403).json({ error: 'You can only reject bookings for your rooms' });
+  // Only the current authority can reject
+  if (user.role !== rule.requiredRole) {
+    return res.status(403).json({
+      error: `Access Denied: Only the current stage authority (${rule.requiredRole.toUpperCase()}) can review this request.`
+    });
   }
 
-  db.prepare(`
-    UPDATE bookings SET status = 'rejected', reject_reason = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `).run(reason || 'No reason provided', req.params.id);
+  const history = parseJSON(booking.approval_history, []);
+  history.push({
+    stage: currentStage,
+    actor_name: user.name,
+    actor_role: user.role,
+    designation: user.designation,
+    action: 'rejected',
+    remarks: reason.trim(),
+    timestamp: new Date().toISOString()
+  });
 
-  notify(booking.user_id, `Your booking "${booking.title}" for ${booking.room_name} on ${booking.date} was rejected. Reason: ${reason || 'No reason provided'}`, booking.id);
-  res.json({ success: true });
+  db.prepare(`
+    UPDATE bookings 
+    SET status = 'rejected',
+        current_stage = 'rejected',
+        reject_reason = ?,
+        rejected_by = ?,
+        rejected_at = datetime('now'),
+        approval_history = ?,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    reason.trim(),
+    user.id,
+    JSON.stringify(history),
+    req.params.id
+  );
+
+  notify(
+    booking.user_id,
+    `Your request "${booking.title}" was rejected by ${user.role.toUpperCase()}. Reason: ${reason}`,
+    booking.id
+  );
+
+  res.json({ message: 'Request rejected. Workflow terminated.', status: 'rejected' });
 });
 
 // PATCH /api/bookings/:id/cancel
@@ -234,42 +396,17 @@ router.patch('/:id/cancel', auth(), (req, res) => {
   const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
 
-  // Only the requester or admin can cancel
-  if (req.user.role !== 'admin' && booking.user_id !== req.user.id) {
-    return res.status(403).json({ error: 'You can only cancel your own bookings' });
+  if (booking.user_id !== req.user.id) {
+    return res.status(403).json({ error: 'Cannot cancel another user request' });
   }
-  if (booking.status === 'cancelled') return res.status(400).json({ error: 'Already cancelled' });
 
-  db.prepare(`UPDATE bookings SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`).run(req.params.id);
+  db.prepare(`
+    UPDATE bookings 
+    SET status = 'cancelled', current_stage = 'cancelled', updated_at = datetime('now')
+    WHERE id = ?
+  `).run(req.params.id);
 
-  const room = db.prepare('SELECT name FROM rooms WHERE id = ?').get(booking.room_id);
-  notify(booking.user_id, `Your booking "${booking.title}" for ${room?.name} on ${booking.date} has been cancelled.`, booking.id);
-
-  res.json({ success: true });
-});
-
-// GET /api/bookings/room/:roomId/calendar?month=YYYY-MM
-router.get('/room/:roomId/calendar', auth(), (req, res) => {
-  const { month } = req.query;
-  if (!month) return res.status(400).json({ error: 'month query param required (YYYY-MM)' });
-
-  const [year, mon] = month.split('-');
-  const dateFrom = `${year}-${mon}-01`;
-  const dateTo = `${year}-${mon}-31`;
-
-  const bookings = db.prepare(`
-    SELECT b.id, b.title, b.date, b.start_time, b.end_time, b.status,
-           u.name as requester_name
-    FROM bookings b JOIN users u ON b.user_id = u.id
-    WHERE b.room_id = ? AND b.date BETWEEN ? AND ?
-      AND b.status IN ('approved','pending')
-    ORDER BY b.date, b.start_time
-  `).all(req.params.roomId, dateFrom, dateTo);
-
-  // Also get timetable
-  const timetable = db.prepare('SELECT * FROM timetable WHERE room_id = ?').all(req.params.roomId);
-
-  res.json({ bookings, timetable });
+  res.json({ message: 'Request cancelled' });
 });
 
 module.exports = router;
