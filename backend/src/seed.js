@@ -4,7 +4,11 @@ const db = require('./db');
 async function seed() {
   console.log('--- Initializing Clean & Deterministic Database ---');
 
+<<<<<<< Updated upstream
   // 1. Wipe existing tables in foreign-key safe order
+=======
+  // Wipes existing data clean so new credentials take effect
+>>>>>>> Stashed changes
   db.exec(`
     DELETE FROM notifications;
     DELETE FROM bookings;
@@ -22,8 +26,13 @@ async function seed() {
   const COORD_EMAIL = 'yash.coordinator@college.edu';
   const COORD_PASS = 'yash@2026';
 
+<<<<<<< Updated upstream
   // 2. Faculty Advisor (Level 2 Reviewer)
   const FACULTY_NAME = 'Utkarsh Shetkar (Faculty)';
+=======
+  // 2. Faculty Advisor (Level 2 Authority)
+  const FACULTY_NAME = 'Utkarsh Shetkar';
+>>>>>>> Stashed changes
   const FACULTY_EMAIL = 'utkarsh.faculty@college.edu';
   const FACULTY_PASS = 'utkarsh@2026';
 
@@ -143,7 +152,11 @@ async function seed() {
   console.log('==================================================');
 }
 
+<<<<<<< Updated upstream
 seed().catch(err => {
   console.error('Error during seeding:', err);
   process.exit(1);
 });
+=======
+seed().catch(console.error);
+>>>>>>> Stashed changes
