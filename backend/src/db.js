@@ -87,17 +87,14 @@ db.exec(`
   );
 `);
 
-<<<<<<< Updated upstream
-// Safe migrations in case table was partially upgraded
-=======
 // -------------------------------------------------------------
 // Check and migrate existing tables with outdated CHECK constraints
 // -------------------------------------------------------------
 try {
   const userTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
   if (userTable && typeof userTable.sql === 'string' && !userTable.sql.includes("'student'")) {
-    console.log('Migrating users table schema to support student & hod roles...');
     db.exec(`
+      PRAGMA foreign_keys = OFF;
       CREATE TABLE users_migrated (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -112,18 +109,16 @@ try {
       SELECT id, name, email, password, role, 'Student', 0, created_at FROM users;
       DROP TABLE users;
       ALTER TABLE users_migrated RENAME TO users;
+      PRAGMA foreign_keys = ON;
     `);
-    console.log('✓ Users table migration successful.');
   }
-} catch (err) {
-  console.warn('Warning during users table migration check:', err.message);
-}
+} catch (err) {}
 
 try {
   const bookingsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'bookings'").get();
   if (bookingsTable && typeof bookingsTable.sql === 'string' && !bookingsTable.sql.includes("'pending_coordinator'")) {
-    console.log('Migrating bookings table schema to support multi-stage approval workflow...');
     db.exec(`
+      PRAGMA foreign_keys = OFF;
       CREATE TABLE bookings_migrated (
         id TEXT PRIMARY KEY,
         room_id TEXT NOT NULL REFERENCES rooms(id),
@@ -159,18 +154,15 @@ try {
       FROM bookings;
       DROP TABLE bookings;
       ALTER TABLE bookings_migrated RENAME TO bookings;
+      PRAGMA foreign_keys = ON;
     `);
-    console.log('✓ Bookings table migration successful.');
   }
-} catch (err) {
-  console.warn('Warning during bookings table migration check:', err.message);
-}
+} catch (err) {}
 
 // Ensure foreign keys are turned ON
 db.exec(`PRAGMA foreign_keys = ON;`);
 
-// Safe column migrations if columns don't exist yet
->>>>>>> Stashed changes
+// Safe column migrations in case table was partially upgraded
 try { db.exec(`ALTER TABLE users ADD COLUMN designation TEXT DEFAULT 'Student'`); } catch(e) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0`); } catch(e) {}
 try { db.exec(`ALTER TABLE bookings ADD COLUMN requirements TEXT DEFAULT '[]'`); } catch(e) {}
